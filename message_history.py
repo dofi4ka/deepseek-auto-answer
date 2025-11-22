@@ -7,6 +7,9 @@ from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
+data_path = Path("data")
+data_path.mkdir(exist_ok=True)
+
 
 class MessageHistory:
     """Класс для хранения истории сообщений в памяти с сохранением в JSON."""
@@ -22,7 +25,7 @@ class MessageHistory:
             storage_path: Путь к файлу для сохранения истории
         """
         self.max_messages = max_messages
-        self.storage_path = Path(storage_path)
+        self.storage_path = data_path / storage_path
         self._history: Dict[int, List[Dict[str, str]]] = {}
 
         # Загружаем историю из файла при инициализации

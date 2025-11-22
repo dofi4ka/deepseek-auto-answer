@@ -16,7 +16,7 @@ services:
       - MESSAGE_WAIT_SECONDS=${MESSAGE_WAIT_SECONDS:-30}
       - WORDS_PER_MINUTE=${WORDS_PER_MINUTE:-100}
     volumes:
-      - ./message_history.json:/app/message_history.json
+      - ./data:/app/data
     logging:
       driver: "json-file"
       options:
