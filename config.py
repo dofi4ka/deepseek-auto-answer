@@ -42,3 +42,8 @@ class Config:
     # Время ожидания перед отправкой ответа (в секундах)
     # Если в течение этого времени приходит новое сообщение, таймер сбрасывается
     MESSAGE_WAIT_SECONDS: int = int(os.getenv("MESSAGE_WAIT_SECONDS", "30"))
+
+    # Количество слов в минуту, с которым будет отвечать бот
+    WORDS_PER_MINUTE: int = int(os.getenv("WORDS_PER_MINUTE", "100"))
+    if WORDS_PER_MINUTE <= 0:
+        WORDS_PER_MINUTE = 100

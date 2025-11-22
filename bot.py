@@ -35,6 +35,34 @@ last_messages: dict[int, Message] = {}
 # Активные задачи таймеров для каждого пользователя
 timer_tasks: dict[int, asyncio.Task] = {}
 
+answering_to: dict[int, bool] = {}
+
+
+async def answer_message(message_obj: Message, response: str):
+    answering_to[message_obj.from_user.id] = True
+    try:
+        paragraphs = response.split("\n\n")
+        for paragraph in paragraphs:
+            words = paragraph.split()
+            time_to_wait = len(words) / Config.WORDS_PER_MINUTE * 60
+            await asyncio.sleep(time_to_wait)
+            await message_obj.answer(paragraph, parse_mode="Markdown")
+    finally:
+        answering_to[message_obj.from_user.id] = False
+
+
+async def wait_for_answer_completion(user_id: int, check_interval: float = 0.5) -> None:
+    """
+    Ждет, пока бот не закончит отвечать пользователю.
+
+    Args:
+        user_id: ID пользователя
+        check_interval: Интервал проверки в секундах
+    """
+    while answering_to.get(user_id, False):
+        await asyncio.sleep(check_interval)
+        logger.debug(f"Ожидание завершения ответа для пользователя {user_id}")
+
 
 async def process_buffered_message(user_id: int, message_obj: Message):
     """
@@ -45,6 +73,18 @@ async def process_buffered_message(user_id: int, message_obj: Message):
         message_obj: Объект последнего сообщения (для ответа)
     """
     if user_id not in message_buffers:
+        return
+
+    # Ждем, пока бот не закончит отвечать этому пользователю
+    if answering_to.get(user_id, False):
+        logger.info(
+            f"Бот уже отвечает пользователю {user_id}, ожидание завершения ответа..."
+        )
+        await wait_for_answer_completion(user_id)
+
+    # Проверяем еще раз после ожидания (на случай, если пришли новые сообщения)
+    if user_id not in message_buffers:
+        logger.debug(f"Буфер для пользователя {user_id} был очищен во время ожидания")
         return
 
     # Получаем накопленное сообщение
@@ -69,11 +109,10 @@ async def process_buffered_message(user_id: int, message_obj: Message):
 
         message_history.add_message(user_id, "assistant", response)
 
-        await message_obj.answer(response, parse_mode="Markdown")
+        await answer_message(message_obj, response)
 
     except Exception as e:
         logger.error(f"Ошибка при обработке сообщения: {e}", exc_info=True)
-        await message_obj.answer("Произошла ошибка при обработке вашего сообщения.")
 
 
 async def handle_user_message(message: Message, user_id: int, text: str):
@@ -112,15 +151,60 @@ async def handle_user_message(message: Message, user_id: int, text: str):
 
     # Создаем новую задачу таймера
     async def timer_task():
+        # Сохраняем ссылку на текущую задачу для проверки актуальности
+        current_task = asyncio.current_task()
         try:
             await asyncio.sleep(Config.MESSAGE_WAIT_SECONDS)
-            # Если таймер не был отменен, обрабатываем сообщение
+            # Проверяем, что таймер все еще активен (не был заменен новым)
+            if user_id not in timer_tasks or timer_tasks[user_id] != current_task:
+                logger.debug(
+                    f"Таймер для пользователя {user_id} был заменен новым, прерываем обработку"
+                )
+                return
+
+            # Если таймер не был отменен, проверяем возможность обработки
             if user_id in message_buffers and user_id in last_messages:
-                await process_buffered_message(user_id, last_messages[user_id])
-                if user_id in timer_tasks:
-                    del timer_tasks[user_id]
-                if user_id in last_messages:
-                    del last_messages[user_id]
+                # Если бот уже отвечает, ждем завершения ответа
+                if answering_to.get(user_id, False):
+                    logger.debug(
+                        f"Таймер истек для пользователя {user_id}, но бот уже отвечает. Ожидание..."
+                    )
+                    await wait_for_answer_completion(user_id)
+
+                    # Проверяем, что таймер все еще актуален после ожидания
+                    if (
+                        user_id not in timer_tasks
+                        or timer_tasks[user_id] != current_task
+                    ):
+                        logger.debug(
+                            f"Таймер для пользователя {user_id} был заменен во время ожидания"
+                        )
+                        return
+
+                    # Проверяем еще раз после ожидания
+                    if user_id not in message_buffers or user_id not in last_messages:
+                        logger.debug(
+                            f"Буфер или сообщение для пользователя {user_id} были удалены во время ожидания"
+                        )
+                        return
+
+                # Обрабатываем сообщение только если бот не отвечает и таймер все еще актуален
+                if not answering_to.get(user_id, False):
+                    # Еще раз проверяем актуальность таймера перед обработкой
+                    if user_id in timer_tasks and timer_tasks[user_id] == current_task:
+                        await process_buffered_message(user_id, last_messages[user_id])
+                        # Очищаем таймер только если он все еще актуален
+                        if (
+                            user_id in timer_tasks
+                            and timer_tasks[user_id] == current_task
+                        ):
+                            del timer_tasks[user_id]
+                        if user_id in last_messages:
+                            del last_messages[user_id]
+                else:
+                    logger.debug(
+                        f"Бот все еще отвечает пользователю {user_id}, обработка отложена"
+                    )
         except asyncio.CancelledError:
             # Таймер был отменен, это нормально
             pass
@@ -137,22 +221,6 @@ async def cmd_start(message: Message):
     await message.answer(
         "Привет! Я бот, который отвечает на ваши сообщения с помощью DeepSeek API."
     )
-
-
-# @dp.message(F.text)
-# async def handle_text_message(message: Message):
-#     """
-#     Обработчик текстовых сообщений от пользователей.
-
-#     Отвечает только разрешенным пользователям и игнорирует медиа.
-#     """
-#     user_id = message.from_user.id
-#     text = message.text
-
-#     if not text:
-#         return
-
-#     await process_message(message, user_id, text)
 
 
 @dp.business_message()
