@@ -46,7 +46,9 @@ async def answer_message(message_obj: Message, response: str):
             words = paragraph.split()
             time_to_wait = len(words) / Config.WORDS_PER_MINUTE * 60
             await asyncio.sleep(time_to_wait)
-            await message_obj.answer(paragraph, parse_mode="Markdown")
+            await message_obj.answer(
+                paragraph.rstrip().rstrip("."), parse_mode="Markdown"
+            )
     finally:
         answering_to[message_obj.from_user.id] = False
 
